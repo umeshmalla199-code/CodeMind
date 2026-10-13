@@ -1,0 +1,9 @@
+0000000000000000000000000000000000000000 f250bd494a33472cf0d7fd95f75d06e908a7dcd3 umeshmalla199-code <umeshmalla199@gmail.com> 1789745947 +0530	commit (initial): Initial commit
+f250bd494a33472cf0d7fd95f75d06e908a7dcd3 2e4a21c691adb666013a0676eaf59698fe1e1518 umeshmalla199-code <umeshmalla199@gmail.com> 1789748804 +0530	commit: Configure production deployment: Dockerfile, render.yaml, health endpoint, and dynamic frontend API origin
+2e4a21c691adb666013a0676eaf59698fe1e1518 b024adc0a196ea6efe7e50c6af0cdf94603135f5 umeshmalla199-code <umeshmalla199@gmail.com> 1789749512 +0530	commit: Add /api/execution/run alias for execution endpoint
+b024adc0a196ea6efe7e50c6af0cdf94603135f5 1db4a43455dec2d40ed77806150f564a9881e4e4 umeshmalla199-code <umeshmalla199@gmail.com> 1789751334 +0530	commit: Fix navigation and problem editor by removing blocking requireAuth guards and auto-modal on load
+1db4a43455dec2d40ed77806150f564a9881e4e4 b203bfe49d56aadf5bedbb1179516515a754f58e umeshmalla199-code <umeshmalla199@gmail.com> 1790520387 +0530	commit: Add CodeMind project
+b203bfe49d56aadf5bedbb1179516515a754f58e 37a288e662067f261901893ac8c5ac170571b338 umeshmalla199-code <umeshmalla199@gmail.com> 1791682773 +0530	commit: upload complete
+37a288e662067f261901893ac8c5ac170571b338 b31a6740e2ff50266d544b40a9ae8dacffad91a2 umeshmalla199-code <umeshmalla199@gmail.com> 1791687670 +0530	commit: complete
+b31a6740e2ff50266d544b40a9ae8dacffad91a2 246e7eec999dea411749618b6f06223d26faddbb umeshmalla199-code <umeshmalla199@gmail.com> 1791688294 +0530	commit: Delete CodeMind
+246e7eec999dea411749618b6f06223d26faddbb 27433f5c5c4cf0b60de686480c8184e6d78c5a30 umeshmalla199-code <umeshmalla199@gmail.com> 1791688718 +0530	commit: Add complete CodeMind project

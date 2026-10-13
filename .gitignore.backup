@@ -1,0 +1,13 @@
+cloudflared.exe
+__pycache__/
+*.pyc
+.pytest_cache/
+.vscode/
+scratch/
+Backend/venv/
+.env
+*.env
+Backend/.env
+Backend/*.env
+!Backend/.env.example
+!.env.example

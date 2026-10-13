@@ -1,0 +1,12 @@
+alembic==1.18.4
+fastapi==0.141.1
+pydantic==2.13.5
+SQLAlchemy==2.0.52
+uvicorn==0.52.4
+openai==3.17.0
+python-dotenv==1.2.3
+cryptography>=42.0.0
+
+# Development and verification
+pytest==9.0.2
+httpx2==2.12.0

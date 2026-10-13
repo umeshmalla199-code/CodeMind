@@ -1,0 +1,94 @@
+[
+  {
+    "query_index": 1,
+    "query": "What is a pointer in C?",
+    "history_count": 0,
+    "T0_request_start": 0.0,
+    "T1_request_assembled_ms": 0.028,
+    "T2_stream_call_ms": 0.03,
+    "T3_T4_first_token_s": 1.245,
+    "T5_T6_total_response_s": 1.596,
+    "reported_metrics": {
+      "ttft": 1.244,
+      "total_time": 1.596,
+      "total_generation_time": 1.594,
+      "tool_execution_time": 0.0,
+      "visualization_time": 0.001,
+      "route": "fast",
+      "model": "openai/gpt-oss-20b",
+      "provider": "groq"
+    },
+    "response_chars": 1233,
+    "first_chunk": "A",
+    "sample": "A pointer in C is a variable that stores the memory address of another variable.   Instead of holdin"
+  },
+  {
+    "query_index": 2,
+    "query": "Why did you use * there?",
+    "history_count": 2,
+    "T0_request_start": 0.0,
+    "T1_request_assembled_ms": 0.056,
+    "T2_stream_call_ms": 0.06,
+    "T3_T4_first_token_s": 0.591,
+    "T5_T6_total_response_s": 0.858,
+    "reported_metrics": {
+      "ttft": 0.59,
+      "total_time": 0.858,
+      "total_generation_time": 0.856,
+      "tool_execution_time": 0.0,
+      "visualization_time": 0.0,
+      "route": "fast",
+      "model": "openai/gpt-oss-20b",
+      "provider": "groq"
+    },
+    "response_chars": 752,
+    "first_chunk": "In",
+    "sample": "In the declaration `int *p = &x;` the asterisk (`*`) serves two purposes:  1. **Type declaration** \u2013"
+  },
+  {
+    "query_index": 3,
+    "query": "Explain the difference between a process and a thread.",
+    "history_count": 0,
+    "T0_request_start": 0.0,
+    "T1_request_assembled_ms": 0.038,
+    "T2_stream_call_ms": 0.042,
+    "T3_T4_first_token_s": 0.576,
+    "T5_T6_total_response_s": 1.011,
+    "reported_metrics": {
+      "ttft": 0.576,
+      "total_time": 1.011,
+      "total_generation_time": 1.011,
+      "tool_execution_time": 0.0,
+      "visualization_time": 0.0,
+      "route": "fast",
+      "model": "openai/gpt-oss-20b",
+      "provider": "groq"
+    },
+    "response_chars": 1800,
+    "first_chunk": "A",
+    "sample": "A **process** is an independent execution unit that owns its own virtual address space, file descrip"
+  },
+  {
+    "query_index": 4,
+    "query": "Can threads in the same process share heap memory?",
+    "history_count": 2,
+    "T0_request_start": 0.0,
+    "T1_request_assembled_ms": 0.021,
+    "T2_stream_call_ms": 0.022,
+    "T3_T4_first_token_s": 0.441,
+    "T5_T6_total_response_s": 0.65,
+    "reported_metrics": {
+      "ttft": 0.441,
+      "total_time": 0.65,
+      "total_generation_time": 0.65,
+      "tool_execution_time": 0.0,
+      "visualization_time": 0.0,
+      "route": "fast",
+      "model": "openai/gpt-oss-20b",
+      "provider": "groq"
+    },
+    "response_chars": 750,
+    "first_chunk": "Yes",
+    "sample": "Yes.   In a single process, all threads run in the same virtual address space, so they can read and "
+  }
+]

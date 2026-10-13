@@ -1,0 +1,10 @@
+{
+  "tests/test_companion_foundation.py::test_companion_chat_endpoint_local_tutor": true,
+  "tests/test_companion_foundation.py::test_companion_all_ten_visualization_types": true,
+  "tests/test_companion_providers_and_voice.py::test_chat_uses_local_tutor_when_no_keys": true,
+  "tests/test_companion_providers_and_voice.py::test_chat_external_provider_failure_graceful_fallback": true,
+  "tests/test_companion_providers_and_voice.py::test_provider_selection_via_env": true,
+  "tests/test_companion_providers_and_voice.py::test_context_passed_to_external_provider": true,
+  "tests/test_conversational_ai_tutor.py::test_short_notes_on_binary_search": true,
+  "tests/test_conversational_ai_tutor.py::test_unrelated_question_inside_active_problem": true
+}
