@@ -1,4 +1,4 @@
-﻿FROM python:3.11-slim
+FROM python:3.11-slim
 
 # Install system compilers and dependencies for C, C++, Java, and Python execution
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -20,6 +20,7 @@ COPY . .
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8000
+ENV _JAVA_OPTIONS="-Xmx128m -Xms32m"
 
 EXPOSE 8000
 

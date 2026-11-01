@@ -33,18 +33,23 @@ from routes import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Apply every approved schema change before application code touches data.
-    upgrade_database()
-
-    db = SessionLocal()
+    import logging
+    _log = logging.getLogger("codemind.startup")
     try:
-        seed_database(db, force=False)
-        # Ensure the documented bootstrap admin (username `admin`, password
-        # `Admin@CodeMind2026!`) is present on every boot so the admin portal is
-        # reproducible for new deployments.
-        _bootstrap_admin(db)
-    finally:
-        db.close()
+        # Apply every approved schema change before application code touches data.
+        upgrade_database()
+    except Exception as exc:
+        _log.error("Database schema upgrade encountered an error: %s", exc, exc_info=True)
+
+    try:
+        db = SessionLocal()
+        try:
+            seed_database(db, force=False)
+            _bootstrap_admin(db)
+        finally:
+            db.close()
+    except Exception as exc:
+        _log.error("Database seeding / bootstrap admin encountered an error: %s", exc, exc_info=True)
     yield
     # Shutdown: Clean up resources if necessary
 
@@ -79,8 +84,8 @@ _allow_credentials = "*" not in ALLOWED_ORIGINS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
-    allow_credentials=_allow_credentials,
+    allow_origin_regex=r"^https?://.*$",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

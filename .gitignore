@@ -3,3 +3,8 @@ Backend/.env
 Backend/venv/
 _pycache_/
 *.pyc
+.env
+.env.*
+!.env.example
+Backend/.env
+Frontend/.env

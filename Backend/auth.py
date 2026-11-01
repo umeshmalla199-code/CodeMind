@@ -200,6 +200,22 @@ def get_current_user(
             db = SessionLocal()
             try:
                 user = db.query(UserAccount).filter(UserAccount.session_token == token).first()
+                if not user and "." in token:
+                    from auth_supabase import supabase_decode_jwt_sub
+                    payload = supabase_decode_jwt_sub(token)
+                    if payload:
+                        sub = payload.get("sub")
+                        jwt_email = (payload.get("email") or "").strip().lower()
+                        from sqlalchemy import or_
+                        if sub and jwt_email:
+                            user = db.query(UserAccount).filter(
+                                or_(UserAccount.supabase_uid == sub, UserAccount.email == jwt_email)
+                            ).first()
+                        elif sub:
+                            user = db.query(UserAccount).filter(UserAccount.supabase_uid == sub).first()
+                        elif jwt_email:
+                            user = db.query(UserAccount).filter(UserAccount.email == jwt_email).first()
+
                 if user:
                     # Enforce account deactivation
                     if not getattr(user, "is_active", True):

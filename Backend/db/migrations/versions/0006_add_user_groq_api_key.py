@@ -1,7 +1,7 @@
 """Add personal Groq API key columns to user_accounts table.
 
 Revision ID: 0006_add_user_groq_api_key
-Revises: 0005_add_account_lifecycle_and_audit_logs
+Revises: 0005_account_lifecycle_audit
 Create Date: 2026-09-28
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 revision = "0006_add_user_groq_api_key"
-down_revision = "0005_add_account_lifecycle_and_audit_logs"
+down_revision = "0005_account_lifecycle_audit"
 branch_labels = None
 depends_on = None
 

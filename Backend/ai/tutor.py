@@ -880,16 +880,14 @@ OUTPUT FORMAT:
 
         providers_to_try = []
         if groq_key:
-            # Only try PRIMARY model + one lighter fallback.
-            # Previously 4 candidates × 25s timeout = up to 100s before executor even runs.
             primary_model = os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b").strip()
-            fast_fallback  = os.environ.get("GROQ_FAST_MODEL", "llama-3.3-70b-versatile").strip()
+            fast_fallback = os.environ.get("GROQ_FAST_MODEL", "openai/gpt-oss-20b").strip()
             groq_base = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
             groq_client = OpenAI(base_url=groq_base, api_key=groq_key)
 
             seen_groq: set = set()
-            for gm in [primary_model, fast_fallback]:
-                if gm and gm not in seen_groq and gm not in ("qwen/qwen3.8-27b", ""):
+            for gm in [primary_model, fast_fallback, "openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]:
+                if gm and gm not in seen_groq:
                     seen_groq.add(gm)
                     providers_to_try.append((f"groq:{gm}", groq_client, gm, 4096))
         if nvidia_key:
@@ -1019,6 +1017,16 @@ OUTPUT FORMAT:
 
         # ── 1. Attempt Real AI Generation via Complete Problem Contract ─────────
         groq_key = (user_groq_api_key or os.environ.get("GROQ_API_KEY", "")).strip()
+        if not groq_key:
+            try:
+                from ai.companion.multi_key_router import multi_key_router
+                fallback_lease = multi_key_router.get_server_fallback_key("groq")
+                if fallback_lease:
+                    groq_key = fallback_lease.decrypted_key
+                    fallback_lease.release()
+            except Exception:
+                pass
+
         openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
         nvidia_key = os.environ.get("NVIDIA_API_KEY", "").strip()
         gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
@@ -1037,7 +1045,7 @@ OUTPUT FORMAT:
                     starter_code=starter_code,
                     current_code=current_code,
                     repair_context=repair_context,
-                    user_groq_api_key=user_groq_api_key,
+                    user_groq_api_key=groq_key,
                     **kwargs,
                 )
                 if ai_solution and ai_solution.get("code"):

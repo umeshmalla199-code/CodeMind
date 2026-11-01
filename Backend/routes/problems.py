@@ -154,8 +154,8 @@ def list_problems(
     if isinstance(tag, str) and tag.strip():
         query = query.join(Problem.tags).filter(Tag.name.ilike(tag.strip()))
 
-    # Total matching records count
-    total = query.distinct().count()
+    # Total matching records count (safe for both SQLite and PostgreSQL)
+    total = query.with_entities(func.count(func.distinct(Problem.id))).scalar() or 0
 
     # Sorting
     sort_by_str = sort_by if isinstance(sort_by, str) else "id"
@@ -178,7 +178,18 @@ def list_problems(
     page_num = page if isinstance(page, int) else 1
     page_sz = page_size if isinstance(page_size, int) else 10
     offset = (page_num - 1) * page_sz
-    problems = query.distinct().offset(offset).limit(page_sz).all()
+
+    has_m2m = bool((domain and isinstance(domain, str) and domain.strip()) or (tag and isinstance(tag, str) and tag.strip()))
+    if has_m2m:
+        id_rows = query.with_entities(Problem.id, sort_column).distinct().offset(offset).limit(page_sz).all()
+        target_ids = [r[0] for r in id_rows]
+        if target_ids:
+            problems_map = {p.id: p for p in db.query(Problem).filter(Problem.id.in_(target_ids)).all()}
+            problems = [problems_map[pid] for pid in target_ids if pid in problems_map]
+        else:
+            problems = []
+    else:
+        problems = query.offset(offset).limit(page_sz).all()
 
     total_pages = math.ceil(total / page_sz) if total > 0 else 1
 

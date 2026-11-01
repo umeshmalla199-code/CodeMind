@@ -487,6 +487,26 @@ def build_canonical_problem_context(
                 if not any(ex.get("input") == inp_candidate for ex in raw_examples_list):
                     _add_example_dict(tc)
 
+    # Also support sample_inputs and sample_outputs arrays
+    sample_inps = prob_dict.get("sample_inputs")
+    sample_outs = prob_dict.get("sample_outputs")
+    if isinstance(sample_inps, list) and isinstance(sample_outs, list):
+        for s_in, s_out in zip(sample_inps, sample_outs):
+            s_in_str = str(s_in or "").strip()
+            if not any(ex.get("input") == s_in_str for ex in raw_examples_list):
+                _add_example_dict({"input": s_in, "output": s_out})
+
+    # If still no examples extracted, try parsing from description text
+    if not raw_examples_list and p_desc:
+        ex_matches = re.findall(
+            r'(?:Example\s*\d*|Sample\s*(?:Input|Test)?\s*\d*)[:\s*\n]+'
+            r'(?:Input|stdin)[:\s*\n]+(.*?)\n\s*(?:Output|stdout)[:\s*\n]+(.*?)(?=\n\s*(?:Example|Sample|Explanation|Note|Constraints|\Z))',
+            p_desc,
+            re.IGNORECASE | re.DOTALL
+        )
+        for inp_m, out_m in ex_matches:
+            _add_example_dict({"input": inp_m.strip(), "output": out_m.strip()})
+
     # Format constraints cleanly without fabricating
     formatted_constraints = ""
     if isinstance(p_constraints, list) and p_constraints:
@@ -697,8 +717,8 @@ def format_canonical_problem_contract(
                 f"2. Solve the EXACT problem specified above ('{context.get('title')}', ID: {context.get('problem_id')}). NEVER solve from the title alone, and NEVER substitute a familiar problem with a similar title.\n"
                 f"3. Strictly adhere to the INPUT FORMAT and OUTPUT FORMAT. Read inputs as specified and write output matching character-by-character, or preserve class/method signatures if starter code indicates.\n"
                 f"4. CONSTRAINTS MUST CONTROL THE ALGORITHM: Analyze all constraints (input size, time limit, memory) and select an optimal algorithm that comfortably passes within bounds.\n"
-                f"5. TEST CASES ARE PART OF THE PROBLEM: Verify the logic internally against all provided PUBLIC EXAMPLES before finalizing code.\n"
-                f"6. Provide a complete, fully compilable/runnable program in {lang_display}.\n"
+                f"5. TEST CASES ARE MANDATORY VERIFICATION: You are provided with the full problem statement and all test cases above. Verify your algorithm mentally against EVERY test case before producing code to ensure 100% test case pass rate.\n"
+                f"6. Provide a complete, fully compilable/runnable program in {lang_display} with no omitted functions, no placeholders, and all required imports/headers included.\n"
                 f"7. STRUCTURE YOUR RESPONSE WITH THESE SECTIONS:\n"
                 f"   - **1. APPROACH** (or **1. UNDERSTANDING & APPROACH**): Brief approach explaining the key invariant, algorithm, and data structures.\n"
                 f"   - **2. COMPLEXITY**: Explicit Time Complexity (O(...)) and Space Complexity (O(...)).\n"

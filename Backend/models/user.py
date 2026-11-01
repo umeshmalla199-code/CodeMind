@@ -107,6 +107,7 @@ class UserAccount(Base):
     password_hash = Column(String(255), nullable=False)
     salt = Column(String(64), nullable=False)
     session_token = Column(String(255), unique=True, nullable=True, index=True)
+    supabase_uid = Column(String(64), unique=True, nullable=True, index=True)
 
     # Roles: "student", "admin", "founder"
     role = Column(String(50), nullable=False, default="student", index=True)
@@ -118,7 +119,7 @@ class UserAccount(Base):
     # Plain 6-digit OTP stored in VARCHAR(10) per DB migration. The plaintext is
     # compared against the internally hash-verified value; the hash is never persisted
     # so the code can be read back by the test/spec suite when needed.
-    verification_otp = Column(String(10), nullable=True)
+    verification_otp = Column(String(128), nullable=True)
     verification_otp_expires_at = Column(DateTime, nullable=True)
     verification_otp_attempts = Column(Integer, nullable=False, default=0)
     welcome_email_sent = Column(Boolean, nullable=False, default=False)
@@ -126,9 +127,9 @@ class UserAccount(Base):
     # Password Reset
     reset_token = Column(String(255), nullable=True, unique=True, index=True)
     reset_token_expires_at = Column(DateTime, nullable=True)
-    # Plain 6-digit recovery OTP in VARCHAR(10). Internal SHA-256 copy stored
+    # Plain 6-digit recovery OTP in VARCHAR(128). Internal SHA-256 copy stored
     # separately for verification; plaintext is not persisted.
-    reset_otp = Column(String(10), nullable=True)
+    reset_otp = Column(String(128), nullable=True)
     reset_otp_expires_at = Column(DateTime, nullable=True)
     reset_otp_attempts = Column(Integer, nullable=False, default=0)
 
@@ -194,6 +195,7 @@ class UserAccount(Base):
             pass
         return {
             "id": self.id,
+            "supabase_uid": getattr(self, "supabase_uid", None),
             "username": self.username,
             "email": self.email,
             "display_name": self.display_name,

@@ -118,6 +118,10 @@ def _inject_python_harness(source_code: str) -> str:
     If the Python source defines a solution function (LeetCode style) and does NOT
     read from stdin/input directly, append an automated test harness to call it.
     """
+    # Prepend typing imports if not present so type annotations never fail
+    if "from typing" not in source_code and "import typing" not in source_code:
+        source_code = "from typing import List, Dict, Tuple, Optional, Set, Any, Union\n" + source_code
+
     # Check if user already uses input() or sys.stdin or has a __main__ entry point
     if "input(" in source_code or "sys.stdin" in source_code or "__main__" in source_code:
         return source_code
@@ -131,16 +135,42 @@ if __name__ == '__main__':
     if not _raw:
         sys.exit(0)
 
-    # Find the user-defined callable
-    _candidates = [
-        _obj for _name, _obj in list(globals().items())
-        if callable(_obj) and not _name.startswith('_') and getattr(_obj, '__module__', None) == '__main__'
-    ]
+    # Find the user-defined callable or class
+    _target_func = None
+    _sol = globals().get('Solution')
+    if _sol and inspect.isclass(_sol):
+        try:
+            _inst = _sol()
+            _methods = [
+                getattr(_inst, _m) for _m in dir(_inst)
+                if callable(getattr(_inst, _m)) and not _m.startswith('_')
+            ]
+            if _methods:
+                _target_func = _methods[0]
+        except Exception:
+            pass
 
-    if not _candidates:
-        sys.exit(0)
-
-    _target_func = _candidates[-1]
+    if _target_func is None:
+        _candidates = [
+            _obj for _name, _obj in list(globals().items())
+            if callable(_obj) and not _name.startswith('_') and getattr(_obj, '__module__', None) == '__main__'
+        ]
+        if not _candidates:
+            sys.exit(0)
+        _last = _candidates[-1]
+        if inspect.isclass(_last):
+            try:
+                _inst = _last()
+                _methods = [
+                    getattr(_inst, _m) for _m in dir(_inst)
+                    if callable(getattr(_inst, _m)) and not _m.startswith('_')
+                ]
+                if _methods:
+                    _target_func = _methods[0]
+            except Exception:
+                pass
+        if _target_func is None:
+            _target_func = _last
 
     # Try matching variable assignments: key = val
     _kwargs = {}
@@ -158,19 +188,29 @@ if __name__ == '__main__':
 
     try:
         _sig = inspect.signature(_target_func)
-        if _kwargs and all(_k in _sig.parameters for _k in _kwargs):
+        _params = [p for p in _sig.parameters.values() if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_ONLY)]
+        _param_names = [p.name for p in _params]
+
+        if _kwargs and all(_k in _param_names for _k in _kwargs):
             _res = _target_func(**_kwargs)
+        elif _kwargs and len(_kwargs) == len(_params):
+            _res = _target_func(*list(_kwargs.values()))
         else:
             _args = []
             for _line in _raw.splitlines():
                 _line = _line.strip()
-                if not _line:
+                if not _line or (_kwargs and ("=" in _line and any(_k in _line for _k in _kwargs))):
                     continue
                 try:
                     _args.append(ast.literal_eval(_line))
                 except Exception:
                     _args.append(_line)
-            _res = _target_func(*_args)
+            if _args:
+                _res = _target_func(*_args)
+            elif _kwargs:
+                _res = _target_func(*list(_kwargs.values()))
+            else:
+                _res = _target_func()
 
         if isinstance(_res, bool):
             print("true" if _res else "false")

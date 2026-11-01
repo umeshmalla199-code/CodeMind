@@ -1,6 +1,6 @@
 """Add RBAC roles, email verification, reset token, legal acceptance, and audit logs.
 
-Revision ID: 0005_add_account_lifecycle_and_audit_logs
+Revision ID: 0005_account_lifecycle_audit
 Revises: 0004_add_user_accounts_table
 Create Date: 2026-09-26
 """
@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0005_add_account_lifecycle_and_audit_logs"
+revision = "0005_account_lifecycle_audit"
 down_revision = "0004_add_user_accounts_table"
 branch_labels = None
 depends_on = None

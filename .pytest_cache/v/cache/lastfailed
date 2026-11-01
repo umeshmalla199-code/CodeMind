@@ -1,10 +1,6 @@
 {
   "Backend/tests/test_conversational_ai_tutor.py::test_short_notes_on_binary_search": true,
   "Backend/tests/test_maya_master_verification.py::test_authentication_and_user_data_isolation": true,
-  "Backend/tests/test_auth_isolation_repair2.py::test_auth_registration_and_login_flow": true,
-  "Backend/tests/test_auth_isolation_repair2.py::test_two_user_complete_data_isolation": true,
-  "Backend/tests/test_auth_isolation_repair2.py::test_session_revocation_on_logout": true,
-  "Backend/tests/test_auth_isolation_repair2.py::test_session_expiration_enforcement": true,
   "Backend/tests/test_auth_security_and_admin_prompt4.py::test_email_verification_flow": true,
   "Backend/tests/test_auth_security_and_admin_prompt4.py::test_login_and_deactivated_user_protection": true,
   "Backend/tests/test_auth_security_and_admin_prompt4.py::test_password_recovery_and_reset": true,
@@ -38,5 +34,10 @@
   "Backend/tests/test_maya_final_context_and_viz.py::test_context_manager_attaches_problem_in_problem_solving_workspace": true,
   "Backend/tests/test_maya_prompt2_continuous_conversation.py::test_continuous_conversation_context_preservation": true,
   "Backend/tests/test_maya_core_functional_fix.py::test_explicit_c_request_receives_c_system_prompt": true,
-  "Backend/tests/test_full_solution_all_problem_library_hardening.py": true
+  "Backend/tests/test_maya_truncation_and_solution_reliability.py::test_intent_analyzer_classifies_coding_as_long_budget": true,
+  "Backend/tests/test_maya_truncation_and_solution_reliability.py::test_gateway_token_budget_scales_for_long_queries": true,
+  "Backend/tests/test_maya_truncation_and_solution_reliability.py::test_gateway_continuation_on_length_truncation": true,
+  "Backend/tests/test_maya_truncation_and_solution_reliability.py::test_unclosed_fence_autoclosing": true,
+  "Backend/tests/test_maya_truncation_and_solution_reliability.py::test_verified_solution_cache_isolation": true,
+  "Backend/tests/test_maya_truncation_and_solution_reliability.py::test_full_solution_endpoint_returns_cached_instantaneously": true
 }

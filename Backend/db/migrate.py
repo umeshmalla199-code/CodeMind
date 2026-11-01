@@ -208,10 +208,16 @@ def _seed_feature_flags(conn) -> None:
 
 def upgrade_database() -> None:
     """Upgrade the configured database to the latest approved schema revision."""
+    from config import DATABASE_URL
     try:
-        config = Config(str(PROJECT_ROOT / "alembic.ini"))
-        config.set_main_option("script_location", str(PROJECT_ROOT / "Backend" / "db" / "migrations"))
-        command.upgrade(config, "head")
+        ini_file = PROJECT_ROOT / "alembic.ini"
+        if not ini_file.exists():
+            ini_file = BACKEND_DIR / "alembic.ini"
+        if ini_file.exists():
+            config = Config(str(ini_file))
+            config.set_main_option("script_location", str(BACKEND_DIR / "db" / "migrations"))
+            config.set_main_option("sqlalchemy.url", DATABASE_URL)
+            command.upgrade(config, "head")
     except Exception:
         # Fall back to declarative creation and dynamic column addition if alembic lock or version mismatch
         pass

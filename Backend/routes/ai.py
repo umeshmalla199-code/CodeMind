@@ -645,6 +645,16 @@ def run_full_solution_pipeline(
                 lease.release()
     if not user_groq_key:
         user_groq_key = os.environ.get("GROQ_API_KEY", "").strip() or None
+    if not user_groq_key and db:
+        try:
+            active_key = db.query(UserApiKey).filter(
+                UserApiKey.provider == "groq",
+                UserApiKey.status == "AVAILABLE"
+            ).order_by(UserApiKey.last_used_at.asc().nullsfirst()).first()
+            if active_key and active_key.encrypted_api_key:
+                user_groq_key = decrypt_secret(active_key.encrypted_api_key)
+        except Exception:
+            pass
 
     # Wall-clock deadline for the entire pipeline: 95s from now.
     # This gives the LLM provider loop a firm cutoff so it never burns
