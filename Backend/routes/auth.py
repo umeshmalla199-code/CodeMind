@@ -63,6 +63,8 @@ from auth_supabase import (
     supabase_login,
     supabase_admin_sync_user,
     supabase_admin_get_user_by_email,
+    supabase_decode_jwt_sub,
+    _get_supabase_config,
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -687,21 +689,32 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
             )
             if not supa_res.get("success") and supa_res.get("already_registered"):
                 supa_res = supabase_resend_otp(existing_unverified.email, "signup")
+            if supa_res.get("rate_limited"):
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=supa_res.get("error")
+                )
             if supa_res.get("supabase_uid"):
                 existing_unverified.supabase_uid = supa_res.get("supabase_uid")
                 db.commit()
             otp_sent = supa_res.get("success", False)
+            if not otp_sent:
+                _email_logger.warning("Supabase Auth signup/resend returned non-success: %s", supa_res.get("error"))
+                if _is_smtp_configured():
+                    otp_sent = _dispatch_otp_email(existing_unverified.email, display_name, otp, "Email Verification")
+                    if existing_unverified.verification_token:
+                        _dispatch_verification_email(existing_unverified.email, display_name, existing_unverified.verification_token)
         else:
             otp_sent = _dispatch_otp_email(existing_unverified.email, display_name, otp, "Email Verification")
             if existing_unverified.verification_token:
                 _dispatch_verification_email(existing_unverified.email, display_name, existing_unverified.verification_token)
 
         if not otp_sent and not is_testing:
-            _email_logger.error("Failed to deliver refreshed OTP email to %s via SMTP. SMTP is not configured in this environment; ignoring.", existing_unverified.email)
-            # No SMTP in this host env: report success on the assumption the code
-            # was delivered via the dev-side log path. Tests run in-process without
-            # a live mail server, so a 502 here would break the spec contract.
-            otp_sent = True
+            _email_logger.error("Failed to deliver refreshed OTP email to %s via all channels.", existing_unverified.email)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=supa_res.get("error") if (is_supabase_auth_enabled() and supa_res.get("error")) else "Unable to dispatch verification email. Please check your email address or try again in a few moments."
+            )
 
         log_audit_event(
             db,
@@ -904,6 +917,10 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
             username=username,
             display_name=display_name
         )
+        if not supa_res.get("success") and supa_res.get("already_registered") and not is_testing:
+            _email_logger.info("User %s already in Supabase Auth; dispatching verification email via resend.", email)
+            supa_res = supabase_resend_otp(email, "signup")
+
         if supa_res.get("rate_limited"):
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -915,24 +932,19 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
         otp_sent = supa_res.get("success", False)
         if not otp_sent:
             _email_logger.warning("Supabase Auth signup returned non-success: %s; attempting direct fallback.", supa_res.get("error"))
-            otp_sent = _dispatch_otp_email(email, display_name, otp, "Email Verification")
-            _dispatch_verification_email(email, display_name, verification_token)
+            if _is_smtp_configured():
+                otp_sent = _dispatch_otp_email(email, display_name, otp, "Email Verification")
+                _dispatch_verification_email(email, display_name, verification_token)
     else:
         otp_sent = _dispatch_otp_email(email, display_name, otp, "Email Verification")
         _dispatch_verification_email(email, display_name, verification_token)
 
-    if not otp_sent:
-        if _is_smtp_configured():
-            _email_logger.error("Failed to deliver verification code email to %s via SMTP.", email)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="Unable to deliver verification code email. Please ensure your email address is correct or try again in a few moments."
-            )
-        else:
-            _email_logger.info("SMTP not configured in environment. Auto-verifying user %s for cloud deployment.", email)
-            new_user.is_verified = True
-            db.commit()
-            db.refresh(new_user)
+    if not otp_sent and not is_testing:
+        _email_logger.error("Failed to deliver verification code email to %s via all channels.", email)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=supa_res.get("error") if (is_supabase_auth_enabled() and supa_res.get("error")) else "Unable to deliver verification code email. Please ensure your email address is correct or try again in a few moments."
+        )
 
     return {
         "status": "success",
@@ -1021,6 +1033,13 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
             )
             if uid:
                 user.supabase_uid = uid
+
+    if not is_valid_otp and is_supabase_auth_enabled():
+        supa_user = supabase_admin_get_user_by_email(user.email)
+        if supa_user and supa_user.get("email_confirmed_at"):
+            is_valid_otp = True
+            if supa_user.get("id") and not user.supabase_uid:
+                user.supabase_uid = supa_user.get("id")
 
     if not is_valid_otp:
         user.verification_otp_attempts = (user.verification_otp_attempts or 0) + 1
@@ -1134,43 +1153,31 @@ def resend_otp(payload: ResendOtpRequest, request: Request, db: Session = Depend
         user.verification_otp_expires_at = now + timedelta(minutes=10)
         user.verification_otp_attempts = 0
         db.commit()
-        if is_supabase_auth_enabled():
-            supa_res = supabase_resend_otp(target_email, "signup")
-            otp_sent = supa_res.get("success", False)
-            if not otp_sent:
-                otp_sent = _dispatch_otp_email(target_email, user.display_name or user.username or "Learner", otp, "Email Verification")
-        else:
-            otp_sent = _dispatch_otp_email(target_email, user.display_name or user.username or "Learner", otp, "Email Verification")
+
         import sys
         is_testing = "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST") is not None
-        if is_testing:
-            existing_unverified.is_verified = True
-            test_session_token = f"cmt_{secrets.token_urlsafe(32)}"
-            existing_unverified.session_token = test_session_token
-            db.commit()
-            db.refresh(existing_unverified)
-            return {
-                "status": "success",
-                "message": "Registration updated.",
-                "email": existing_unverified.email,
-                "is_verified": True,
-                "requires_otp": False,
-                "requires_verification": False,
-                "token": test_session_token,
-                "access_token": test_session_token,
-                "session_token": test_session_token,
-                "user": existing_unverified.to_dict(),
-                "profile": {
-                    "student_id": existing_unverified.id,
-                    "student_name": display_name,
-                    "bot_name": "Maya",
-                    "daily_streak": 1
-                }
-            }
+
+        if is_supabase_auth_enabled():
+            supa_res = supabase_resend_otp(target_email, "signup")
+            if supa_res.get("rate_limited"):
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=supa_res.get("error")
+                )
+            otp_sent = supa_res.get("success", False)
+            if not otp_sent:
+                _email_logger.warning("Supabase Auth resend returned non-success: %s", supa_res.get("error"))
+                if _is_smtp_configured():
+                    otp_sent = _dispatch_otp_email(target_email, user.display_name or user.username or "Learner", otp, "Email Verification")
+        else:
+            otp_sent = _dispatch_otp_email(target_email, user.display_name or user.username or "Learner", otp, "Email Verification")
 
         if not otp_sent and not is_testing:
-            _email_logger.error("Resend OTP failed to deliver to %s via SMTP. SMTP is not configured in this environment; ignoring.", target_email)
-            otp_sent = True
+            _email_logger.error("Resend OTP failed to deliver to %s via all channels.", target_email)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=supa_res.get("error") if (is_supabase_auth_enabled() and supa_res.get("error")) else "Unable to dispatch verification code. Please check your email address or try again in a few moments."
+            )
 
     _email_logger.info("[DEV] Resent 6-digit OTP dispatched for %s (%s)", target_email, payload.purpose or "EMAIL_VERIFICATION")
 
@@ -1294,6 +1301,106 @@ def verify_email_link(
     </body>
     </html>
     """)
+
+
+class VerifySupabaseSessionRequest(BaseModel):
+    access_token: str
+
+
+@router.post("/verify-supabase-session")
+def verify_supabase_session(
+    payload: VerifySupabaseSessionRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """
+    Exchanges a validated Supabase session token (e.g. from clicking an email confirmation link)
+    for an authenticated CodeMind session.
+    """
+    raw_token = payload.access_token.strip()
+    if not raw_token:
+        raise HTTPException(status_code=400, detail="Missing access token.")
+
+    import httpx
+    decoded = supabase_decode_jwt_sub(raw_token)
+    user_email = None
+    user_uid = None
+    if decoded:
+        user_email = decoded.get("email")
+        user_uid = decoded.get("sub")
+
+    if not user_email and is_supabase_auth_enabled():
+        cfg = _get_supabase_config()
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                resp = client.get(
+                    f"{cfg['url']}/auth/v1/user",
+                    headers={
+                        "apikey": cfg["anon_key"],
+                        "Authorization": f"Bearer {raw_token}"
+                    }
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    user_email = data.get("email")
+                    user_uid = data.get("id")
+        except Exception as exc:
+            _email_logger.warning("Supabase user fetch error: %s", exc)
+
+    if not user_email:
+        raise HTTPException(status_code=401, detail="Invalid or expired verification session.")
+
+    clean_email = user_email.strip().lower()
+    user = db.query(UserAccount).filter(UserAccount.email == clean_email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User account not found.")
+
+    user.is_verified = True
+    user.verification_otp = None
+    user.verification_otp_expires_at = None
+    user.verification_otp_attempts = 0
+    if user_uid and not user.supabase_uid:
+        user.supabase_uid = user_uid
+
+    now = datetime.now(timezone.utc)
+    session_token = f"cmt_{secrets.token_urlsafe(32)}"
+    user.session_token = session_token
+    user.last_login = now
+    db.commit()
+    db.refresh(user)
+
+    profile = db.query(StudentLearningProfile).filter(
+        StudentLearningProfile.student_id == user.id
+    ).first()
+
+    client_ip = request.client.host if request.client else "unknown"
+    log_audit_event(
+        db,
+        actor_id=user.id,
+        action="EMAIL_VERIFIED_LINK",
+        resource_type="user",
+        resource_id=user.id,
+        actor_email=user.email,
+        actor_role=user.role or "student",
+        result="SUCCESS",
+        details="Email confirmed via Supabase email link. CodeMind session activated.",
+        ip_address=client_ip
+    )
+
+    return {
+        "status": "success",
+        "message": "Email successfully verified. Welcome to CodeMind!",
+        "token": session_token,
+        "access_token": session_token,
+        "session_token": session_token,
+        "user": user.to_dict(),
+        "profile": {
+            "student_id": user.id,
+            "student_name": (profile.student_name if profile else user.display_name),
+            "bot_name": getattr(profile, "bot_name", "Maya") if profile else "Maya",
+            "daily_streak": getattr(profile, "daily_streak", 1) if profile else 1
+        }
+    }
 
 
 @router.post("/resend-verification")

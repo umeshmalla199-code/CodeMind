@@ -200,7 +200,8 @@ def supabase_resend_otp(email: str, otp_type: str = "signup") -> Dict[str, Any]:
             elif resp.status_code == 429:
                 return {
                     "success": False,
-                    "error": "Rate limit exceeded. Please wait 60 seconds before requesting another code."
+                    "rate_limited": True,
+                    "error": "For security purposes, you can only request this once every 60 seconds. Please wait before requesting another code."
                 }
             else:
                 err_msg = data.get("msg") or data.get("message") or "Failed to resend verification code."

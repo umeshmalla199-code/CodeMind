@@ -102,8 +102,11 @@ def run_tests():
     # TEST 6: Resend OTP
     print("\n[TEST 6] Resend OTP Endpoint")
     resend_resp = client.post("/api/auth/resend-otp", json={"email": test_email, "purpose": "EMAIL_VERIFICATION"})
-    assert resend_resp.status_code == 200, f"Resend failed: {resend_resp.text}"
-    print("Passed: Resend OTP returned success.")
+    assert resend_resp.status_code in (200, 429), f"Resend failed: {resend_resp.text}"
+    if resend_resp.status_code == 429:
+        print("Passed: Resend OTP correctly reported rate limit cooldown (HTTP 429).")
+    else:
+        print("Passed: Resend OTP returned success.")
 
     # TEST 7: OTP Verification
     print("\n[TEST 7] OTP Verification")

@@ -8160,7 +8160,7 @@
                 window._pendingOtpUser = data.user;
                 window._pendingOtpProfile = data.profile;
                 showAuthOtpStep(targetEmail);
-                showAuthSuccess(`Account ready! A 6-digit verification code was dispatched to ${maskAuthEmail(targetEmail)}. Please enter it below to activate your account.`);
+                showAuthSuccess(`Account ready! A verification email has been dispatched to ${maskAuthEmail(targetEmail)}. Please check your inbox and click the confirmation link, or enter your 6-digit code below to activate your account.`);
                 return;
             } catch(err) {
                 const classified = classifyApiError(err);
@@ -15745,8 +15745,8 @@
         async function loadDropdowns() {
             try {
                 const [topicsRes, sourcesRes] = await Promise.all([
-                    fetch(`${API_BASE}/topics`),
-                    fetch(`${API_BASE}/sources`)
+                    fetch(`${API_BASE}/api/topics`),
+                    fetch(`${API_BASE}/api/sources`)
                 ]);
 
                 if (topicsRes.ok) {
@@ -15787,7 +15787,7 @@
         // STATS SUMMARY
         async function fetchStats() {
             try {
-                const res = await fetch(`${API_BASE}/problems?page=1&page_size=1`);
+                const res = await fetch(`${API_BASE}/api/problems?page=1&page_size=1`);
                 if (res.ok) {
                     const data = await res.json();
                     const statEl = document.getElementById("totalProblemsStat");
@@ -15865,7 +15865,7 @@
             if (filters.source) params.set("source", filters.source);
             if (filters.problem_type) params.set("problem_type", filters.problem_type);
 
-            const reqUrl = `${API_BASE}/problems?${params.toString()}`;
+            const reqUrl = `${API_BASE}/api/problems?${params.toString()}`;
             console.log(`[Problem Library] API_BASE:`, API_BASE);
             console.log(`[Problem Library] Requested URL:`, reqUrl);
 
@@ -16058,7 +16058,7 @@
         // OPEN A PROBLEM & LOAD DETAILS INTO PRACTICE WORKSPACE
         async function openProblem(problemId) {
             try {
-                const response = await fetch(`${API_BASE}/problems/${problemId}`);
+                const response = await fetch(`${API_BASE}/api/problems/${problemId}`);
                 if (!response.ok) {
                     throw new Error("Could not fetch problem details.");
                 }
@@ -16593,7 +16593,7 @@
         // Fetch the first available problem if user directly opens workspace
         async function fetchFirstProblem() {
             try {
-                const res = await fetch(`${API_BASE}/problems?page=1&page_size=1`);
+                const res = await fetch(`${API_BASE}/api/problems?page=1&page_size=1`);
                 if (res.ok) {
                     const data = await res.json();
                     if (data.items && data.items.length > 0) {
@@ -17389,7 +17389,7 @@
                 }
                 select.value = currentVal;
             } else {
-                fetch(`${API_BASE}/topics`).then(res => res.json()).then(topics => {
+                fetch(`${API_BASE}/api/topics`).then(res => res.json()).then(topics => {
                     select.innerHTML = '<option value="All">All Topics (Full-Spectrum)</option>';
                     topics.forEach(t => {
                         const opt = document.createElement("option");
@@ -17492,7 +17492,7 @@
         }
 
         async function generateAssessmentFromRealProblemBank(topic, difficulty, count, duration, aiEnabled) {
-            let pUrl = `${API_BASE}/problems?page=1&page_size=100`;
+            let pUrl = `${API_BASE}/api/problems?page=1&page_size=100`;
             if (topic && topic !== "All") pUrl += `&domain=${encodeURIComponent(topic)}`;
             if (difficulty && difficulty !== "Mixed") pUrl += `&difficulty=${encodeURIComponent(difficulty)}`;
 
@@ -17506,7 +17506,7 @@
             } catch(e) {}
 
             if (!problems.length) {
-                const r2 = await fetch(`${API_BASE}/problems?page=1&page_size=50`);
+                const r2 = await fetch(`${API_BASE}/api/problems?page=1&page_size=50`);
                 if (r2.ok) {
                     const pd2 = await r2.json();
                     problems = pd2.items || pd2.problems || [];
@@ -17694,7 +17694,7 @@
 
                 if (!data) {
                     const sid = getStudentId();
-                    let pUrl = `${API_BASE}/problems?page=1&page_size=100`;
+                    let pUrl = `${API_BASE}/api/problems?page=1&page_size=100`;
                     if (topic && topic !== "All") pUrl += `&domain=${encodeURIComponent(topic)}`;
                     const [pRes, progRes] = await Promise.all([
                         fetch(pUrl).then(r => r.ok ? r.json() : null).catch(() => null),
@@ -18011,7 +18011,7 @@
         async function ensureCatalogProblemsLoaded() {
             if (catalogProblemsCache.length > 0) return;
             try {
-                const res = await fetch(`${API_BASE}/problems?page=1&page_size=100`);
+                const res = await fetch(`${API_BASE}/api/problems?page=1&page_size=100`);
                 if (res.ok) {
                     const data = await res.json();
                     catalogProblemsCache = data.items || [];
@@ -23127,6 +23127,44 @@
 
         // Initialize on page load & restore session if present
         window.addEventListener("DOMContentLoaded", () => {
+            // Check for Supabase Auth redirect (e.g. email confirmation link clicked)
+            try {
+                const hash = window.location.hash || '';
+                const search = window.location.search || '';
+                const hashParams = new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash);
+                const searchParams = new URLSearchParams(search.startsWith('?') ? search.slice(1) : search);
+
+                const errDesc = hashParams.get('error_description') || searchParams.get('error_description');
+                if (errDesc) {
+                    window.history.replaceState(null, null, window.location.pathname);
+                    showNotification('⚠️ Verification notice: ' + decodeURIComponent(errDesc.replace(/\+/g, ' ')), 'error');
+                }
+
+                const supaAccessToken = hashParams.get('access_token') || searchParams.get('access_token');
+                if (supaAccessToken) {
+                    window.history.replaceState(null, null, window.location.pathname);
+                    (async () => {
+                        try {
+                            const vRes = await fetch(`${API_BASE}/api/auth/verify-supabase-session`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ access_token: supaAccessToken })
+                            });
+                            if (vRes.ok) {
+                                const vData = await vRes.json();
+                                const token = vData.token || (vData.user && vData.user.session_token);
+                                setAuthSession(token, vData.user, vData.profile);
+                                closeAuthModal();
+                                showNotification('🎉 Welcome to CodeMind! Your email is verified and your account is ready.');
+                                initDashboard();
+                            }
+                        } catch(e) {
+                            console.warn('Supabase session verification error:', e);
+                        }
+                    })();
+                }
+            } catch(e) {}
+
             checkBackendHealth();
             loadDropdowns();
             fetchStats();
