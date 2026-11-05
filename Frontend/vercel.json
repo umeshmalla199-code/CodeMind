@@ -5,6 +5,10 @@
       "destination": "https://codemind-6sib.onrender.com/api/:path*"
     },
     {
+      "source": "/health",
+      "destination": "https://codemind-6sib.onrender.com/health"
+    },
+    {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
