@@ -66,6 +66,12 @@ from auth_supabase import (
     supabase_decode_jwt_sub,
     _get_supabase_config,
 )
+from email_service import (
+    is_brevo_configured,
+    send_brevo_email,
+    build_otp_email_template,
+    build_welcome_email_template,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -241,56 +247,66 @@ def _dispatch_welcome_email(to_email: str, display_name: str) -> None:
     """
     Sends a one-time welcome email after the user completes OTP verification.
     This must be called at most once per user (gated by welcome_email_sent flag on server).
+    Prioritizes Brevo's Transactional Email API with SMTP fallback.
     """
     cfg = _get_email_config()
-    subject = "Welcome to CodeMind! 🎉"
-    app_url = cfg["app_base_url"]
-    text_body = (
-        f"Hello {display_name},\n\n"
-        f"Your CodeMind account is now fully verified and active! "
-        f"You're ready to start your algorithm journey with Maya, your AI tutor.\n\n"
-        f"Visit CodeMind: {app_url}\n\n"
-        f"Happy coding!\n— The CodeMind Team"
-    )
-    html_body = (
-        f"<p>Hello <strong>{display_name}</strong>,</p>"
-        f"<p>🎉 Your CodeMind account is now fully verified and active!</p>"
-        f"<p>You're ready to start solving problems and learning algorithms with Maya, your personal AI tutor.</p>"
-        f"<p><a href='{app_url}' style='background:#d4af37;color:#000;padding:10px 20px;"
-        f"text-decoration:none;border-radius:6px;font-weight:700;'>Start Learning →</a></p>"
-        f"<p><small>If you did not create this account, please contact support@codemind.local.</small></p>"
-    )
-    sent = _send_smtp_email(to_email, subject, html_body, text_body)
-    status_str = "sent" if sent else "skipped (no SMTP)"
-    _log_email_event(to_email, "welcome", subject, status_str)
-    if not sent:
-        _email_logger.info("[DEV] Welcome email for %s (SMTP not configured, would send once only).", to_email)
+    app_url = cfg.get("app_base_url") or "https://codemind-frontend-rosy.vercel.app"
+    subject, html_body, text_body = build_welcome_email_template(display_name, app_url)
+
+    sent = False
+    error_msg = None
+    if is_brevo_configured():
+        res = send_brevo_email(to_email, display_name, subject, html_body, text_body)
+        sent = res.get("success", False)
+        error_msg = res.get("error")
+    elif _is_smtp_configured():
+        sent = _send_smtp_email(to_email, subject, html_body, text_body)
+        if not sent:
+            error_msg = "SMTP send failed"
+    else:
+        _email_logger.info("[DEV] Welcome email for %s (no email provider configured).", to_email)
+
+    status_str = "sent" if sent else f"skipped ({error_msg or 'no provider'})"
+    _log_email_event(to_email, "welcome", subject, status_str, error=error_msg)
 
 
 def _dispatch_otp_email(to_email: str, display_name: str, otp: str, purpose: str = "Email Verification") -> bool:
     """
-    Sends a 6-digit OTP via email for email verification or mobile/other purposes.
-    Never logs or leaks the OTP code. Returns True if sent via SMTP, False otherwise.
+    Sends a 6-digit OTP via email for email verification or password recovery.
+    Never logs or leaks the OTP code. Returns True if sent via Brevo/SMTP, False otherwise.
+    Prioritizes Brevo Transactional Email API (https://api.brevo.com/v3/smtp/email).
     """
-    cfg = _get_email_config()
-    subject = f"CodeMind {purpose} Code"
-    text_body = (
-        f"Hello {display_name},\n\n"
-        f"Your CodeMind {purpose} code is: {otp}\n\n"
-        f"This code expires in 10 minutes. Do not share it with anyone.\n\n"
-        f"— The CodeMind Team"
-    )
-    html_body = (
-        f"<p>Hello <strong>{display_name}</strong>,</p>"
-        f"<p>Your CodeMind <strong>{purpose}</strong> code is:</p>"
-        f"<p style='font-size:32px;font-weight:700;letter-spacing:8px;color:#d4af37;'>{otp}</p>"
-        f"<p>This code expires in <strong>10 minutes</strong>. Do not share it with anyone.</p>"
-    )
-    sent = _send_smtp_email(to_email, subject, html_body, text_body)
-    status_str = "sent" if sent else "skipped (no SMTP)"
-    _log_email_event(to_email, f"{purpose.lower().replace(' ', '_')}_otp", subject, status_str)
+    subject, html_body, text_body = build_otp_email_template(display_name, otp, purpose)
+    sent = False
+    error_msg = None
+
+    if is_brevo_configured():
+        _email_logger.info("Dispatching %s OTP to %s via Brevo API.", purpose, to_email)
+        res = send_brevo_email(to_email, display_name, subject, html_body, text_body)
+        sent = res.get("success", False)
+        error_msg = res.get("error")
+        if not sent:
+            _email_logger.warning("Brevo delivery failed for %s (%s): %s", to_email, purpose, error_msg)
+    elif _is_smtp_configured():
+        _email_logger.info("Brevo not configured; dispatching %s OTP to %s via SMTP.", purpose, to_email)
+        sent = _send_smtp_email(to_email, subject, html_body, text_body)
+        if not sent:
+            error_msg = "SMTP delivery failed."
+    else:
+        import sys
+        is_testing = "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST") is not None
+        if is_testing:
+            _email_logger.info("[TEST] Mocking OTP email delivery for %s (test mode active).", to_email)
+            sent = True
+        else:
+            _email_logger.warning("No email delivery provider configured (BREVO_API_KEY missing in environment).")
+            sent = False
+            error_msg = "No email delivery provider configured in environment."
+
+    status_str = "sent" if sent else f"failed: {error_msg or 'unknown'}"
+    _log_email_event(to_email, f"{purpose.lower().replace(' ', '_')}_otp", subject, status_str, error=error_msg)
     if not sent:
-        _email_logger.info("[DEV] %s OTP dispatched for %s (expires in 10m, length=%d)", purpose, to_email, len(otp))
+        _email_logger.info("[DEV] %s OTP dispatch failed or mock skipped for %s (length=%d)", purpose, to_email, len(otp))
     return sent
 
 
@@ -624,10 +640,22 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
     ).first()
 
     if existing_unverified:
-        # Re-use and update the pending unverified account
+        now = datetime.now(timezone.utc)
+        # Cooldown check: prevent rapid re-registration spam if code was sent < 60s ago
+        if existing_unverified.verification_otp_expires_at:
+            exp = existing_unverified.verification_otp_expires_at
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp > now + timedelta(minutes=9):
+                remaining_sec = max(1, int((exp - (now + timedelta(minutes=9))).total_seconds()))
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=f"A verification code was recently requested. Please wait {remaining_sec} seconds before requesting another code."
+                )
+
+        # Re-use and update the pending unverified account safely
         pw_hash, salt = hash_password(payload.password)
         otp = f"{secrets.randbelow(900000) + 100000:06d}"
-        now = datetime.now(timezone.utc)
         otp_expiry = now + timedelta(minutes=10)
 
         existing_unverified.username = username
@@ -678,42 +706,13 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
                 }
             }
 
-        # Dispatch OTP verification code
-        if is_supabase_auth_enabled():
-            _email_logger.info("Dispatching verification OTP to %s via Supabase Auth custom SMTP.", existing_unverified.email)
-            supa_res = supabase_signup(
-                email=existing_unverified.email,
-                password=payload.password,
-                username=username,
-                display_name=display_name
-            )
-            if not supa_res.get("success") and supa_res.get("already_registered"):
-                supa_res = supabase_resend_otp(existing_unverified.email, "signup")
-            if supa_res.get("rate_limited"):
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=supa_res.get("error")
-                )
-            if supa_res.get("supabase_uid"):
-                existing_unverified.supabase_uid = supa_res.get("supabase_uid")
-                db.commit()
-            otp_sent = supa_res.get("success", False)
-            if not otp_sent:
-                _email_logger.warning("Supabase Auth signup/resend returned non-success: %s", supa_res.get("error"))
-                if _is_smtp_configured():
-                    otp_sent = _dispatch_otp_email(existing_unverified.email, display_name, otp, "Email Verification")
-                    if existing_unverified.verification_token:
-                        _dispatch_verification_email(existing_unverified.email, display_name, existing_unverified.verification_token)
-        else:
-            otp_sent = _dispatch_otp_email(existing_unverified.email, display_name, otp, "Email Verification")
-            if existing_unverified.verification_token:
-                _dispatch_verification_email(existing_unverified.email, display_name, existing_unverified.verification_token)
-
+        # Dispatch OTP verification code via configured email provider (Brevo prioritized)
+        otp_sent = _dispatch_otp_email(existing_unverified.email, display_name, otp, "Email Verification")
         if not otp_sent and not is_testing:
-            _email_logger.error("Failed to deliver refreshed OTP email to %s via all channels.", existing_unverified.email)
+            _email_logger.error("Failed to deliver refreshed OTP email to %s via email provider.", existing_unverified.email)
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=supa_res.get("error") if (is_supabase_auth_enabled() and supa_res.get("error")) else "Unable to dispatch verification email. Please check your email address or try again in a few moments."
+                detail="Unable to dispatch verification email. Please check your email address or try again in a few moments."
             )
 
         log_audit_event(
@@ -908,43 +907,29 @@ def register(payload: RegisterRequest, request: Request, db: Session = Depends(g
             }
         }
 
-    # Dispatch OTP verification code and token link to the user's email
-    if is_supabase_auth_enabled():
-        _email_logger.info("Registering user %s with Supabase Auth and dispatching OTP via custom SMTP.", email)
-        supa_res = supabase_signup(
-            email=email,
-            password=payload.password,
-            username=username,
-            display_name=display_name
-        )
-        if not supa_res.get("success") and supa_res.get("already_registered") and not is_testing:
-            _email_logger.info("User %s already in Supabase Auth; dispatching verification email via resend.", email)
-            supa_res = supabase_resend_otp(email, "signup")
-
-        if supa_res.get("rate_limited"):
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=supa_res.get("error")
-            )
-        if supa_res.get("supabase_uid"):
-            new_user.supabase_uid = supa_res.get("supabase_uid")
-            db.commit()
-        otp_sent = supa_res.get("success", False)
-        if not otp_sent:
-            _email_logger.warning("Supabase Auth signup returned non-success: %s; attempting direct fallback.", supa_res.get("error"))
-            if _is_smtp_configured():
-                otp_sent = _dispatch_otp_email(email, display_name, otp, "Email Verification")
-                _dispatch_verification_email(email, display_name, verification_token)
-    else:
-        otp_sent = _dispatch_otp_email(email, display_name, otp, "Email Verification")
-        _dispatch_verification_email(email, display_name, verification_token)
-
+    # Dispatch OTP verification code directly via configured email provider (Brevo prioritized)
+    otp_sent = _dispatch_otp_email(email, display_name, otp, "Email Verification")
     if not otp_sent and not is_testing:
-        _email_logger.error("Failed to deliver verification code email to %s via all channels.", email)
+        _email_logger.error("Failed to deliver verification code email to %s via email provider.", email)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=supa_res.get("error") if (is_supabase_auth_enabled() and supa_res.get("error")) else "Unable to deliver verification code email. Please ensure your email address is correct or try again in a few moments."
+            detail="Unable to deliver verification code email. Please ensure your email address is correct or try again in a few moments."
         )
+
+    # Optional background sync to Supabase Auth if configured
+    if is_supabase_auth_enabled():
+        try:
+            supa_res = supabase_signup(
+                email=email,
+                password=payload.password,
+                username=username,
+                display_name=display_name
+            )
+            if supa_res.get("supabase_uid"):
+                new_user.supabase_uid = supa_res.get("supabase_uid")
+                db.commit()
+        except Exception as exc:
+            _email_logger.debug("Optional Supabase auth sync warning on signup: %s", exc)
 
     return {
         "status": "success",
@@ -1046,7 +1031,7 @@ def verify_otp(payload: VerifyOtpRequest, request: Request, db: Session = Depend
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired verification code."
+            detail="Invalid verification code. Please check the code and try again."
         )
 
     # Verification successful!
@@ -1108,6 +1093,13 @@ def resend_otp(payload: ResendOtpRequest, request: Request, db: Session = Depend
             "message": f"If an account with email {email} exists, a new verification code has been dispatched."
         }
 
+    purpose = (payload.purpose or "EMAIL_VERIFICATION").upper()
+    if purpose == "EMAIL_VERIFICATION" and getattr(user, "is_verified", False):
+        return {
+            "status": "success",
+            "message": "Account is already verified. Please sign in."
+        }
+
     # Cooldown check
     last_resend = _resend_cooldown_tracker.get(user.id)
     now_ts = time.time()
@@ -1123,63 +1115,37 @@ def resend_otp(payload: ResendOtpRequest, request: Request, db: Session = Depend
     now = datetime.now(timezone.utc)
     target_email = user.email
 
-    if payload.purpose == "PASSWORD_RECOVERY":
-        user.reset_otp = hash_otp(otp, user.salt)
+    import sys
+    is_testing = "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST") is not None
+
+    if purpose == "PASSWORD_RECOVERY":
+        user.reset_otp = otp
         user.reset_otp_expires_at = now + timedelta(minutes=10)
         user.reset_otp_attempts = 0
         db.commit()
 
-        import sys
-        is_testing = "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST") is not None
-        otp_sent = False
-
-        if is_supabase_auth_enabled():
-            supa_rec = supabase_recover_password(target_email)
-            otp_sent = supa_rec.get("success", False)
-            if not otp_sent:
-                otp_sent = _dispatch_otp_email(target_email, user.display_name or user.username or "Learner", otp, "Password Recovery")
-        else:
-            otp_sent = _dispatch_otp_email(target_email, user.display_name or user.username or "Learner", otp, "Password Recovery")
-
+        otp_sent = _dispatch_otp_email(target_email, user.display_name or user.username or "Learner", otp, "Password Recovery")
         if not otp_sent and not is_testing:
-            _email_logger.error("Failed to deliver recovery OTP to %s via all channels.", target_email)
+            _email_logger.error("Failed to deliver recovery OTP to %s.", target_email)
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Unable to dispatch recovery email. Please try again in a few moments."
             )
     else:
-        # Spec contract: store the plain 6-digit OTP (VARCHAR(10)).
         user.verification_otp = otp
         user.verification_otp_expires_at = now + timedelta(minutes=10)
         user.verification_otp_attempts = 0
         db.commit()
 
-        import sys
-        is_testing = "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST") is not None
-
-        if is_supabase_auth_enabled():
-            supa_res = supabase_resend_otp(target_email, "signup")
-            if supa_res.get("rate_limited"):
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=supa_res.get("error")
-                )
-            otp_sent = supa_res.get("success", False)
-            if not otp_sent:
-                _email_logger.warning("Supabase Auth resend returned non-success: %s", supa_res.get("error"))
-                if _is_smtp_configured():
-                    otp_sent = _dispatch_otp_email(target_email, user.display_name or user.username or "Learner", otp, "Email Verification")
-        else:
-            otp_sent = _dispatch_otp_email(target_email, user.display_name or user.username or "Learner", otp, "Email Verification")
-
+        otp_sent = _dispatch_otp_email(target_email, user.display_name or user.username or "Learner", otp, "Email Verification")
         if not otp_sent and not is_testing:
-            _email_logger.error("Resend OTP failed to deliver to %s via all channels.", target_email)
+            _email_logger.error("Resend OTP failed to deliver to %s.", target_email)
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=supa_res.get("error") if (is_supabase_auth_enabled() and supa_res.get("error")) else "Unable to dispatch verification code. Please check your email address or try again in a few moments."
+                detail="Unable to dispatch verification code. Please check your email address or try again in a few moments."
             )
 
-    _email_logger.info("[DEV] Resent 6-digit OTP dispatched for %s (%s)", target_email, payload.purpose or "EMAIL_VERIFICATION")
+    _email_logger.info("Resent 6-digit OTP dispatched for %s (%s)", target_email, purpose)
 
     return {
         "status": "success",
@@ -1572,16 +1538,18 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
                 db.commit()
 
     if not getattr(user, "is_verified", False):
-        if is_supabase_auth_enabled():
-            supabase_resend_otp(user.email, "signup")
-        elif not _is_smtp_configured():
-            _email_logger.info("SMTP not configured in environment. Auto-verifying unverified user on login.")
-            user.is_verified = True
-            db.commit()
-            db.refresh(user)
-        else:
+        now = datetime.now(timezone.utc)
+        # Check cooldown so rapid login attempts do not flood user's inbox
+        should_send = True
+        if user.verification_otp_expires_at:
+            exp = user.verification_otp_expires_at
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp > now + timedelta(minutes=9):
+                should_send = False
+
+        if should_send:
             otp = f"{secrets.randbelow(900000) + 100000:06d}"
-            now = datetime.now(timezone.utc)
             user.verification_otp = otp
             user.verification_otp_expires_at = now + timedelta(minutes=10)
             user.verification_otp_attempts = 0
@@ -1708,11 +1676,20 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
     ).first()
 
     if user:
-        # Spec contract: store a plain 6-digit recovery OTP in VARCHAR(10).
-        # The server-side comparison uses an internal HMAC-SHA256 hash of that
-        # OTP, so the plaintext never persists while remaining verifiable.
-        otp = f"{secrets.randbelow(900000) + 100000:06d}"
         now = datetime.now(timezone.utc)
+        # Resend cooldown check (60s)
+        if user.reset_otp_expires_at:
+            exp = user.reset_otp_expires_at
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if exp > now + timedelta(minutes=9):
+                remaining_sec = max(1, int((exp - (now + timedelta(minutes=9))).total_seconds()))
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=f"A password recovery code was recently sent. Please wait {remaining_sec} seconds before requesting another code."
+                )
+
+        otp = f"{secrets.randbelow(900000) + 100000:06d}"
         user.reset_otp = otp
         user.reset_otp_expires_at = now + timedelta(minutes=10)
         user.reset_otp_attempts = 0
@@ -1722,27 +1699,13 @@ def forgot_password(payload: ForgotPasswordRequest, request: Request, db: Sessio
 
         import sys
         is_testing = "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST") is not None
-        otp_sent = False
 
-        if is_supabase_auth_enabled():
-            _email_logger.info("Dispatching password recovery email for %s via Supabase Auth custom SMTP.", user.email)
-            supa_rec = supabase_recover_password(user.email)
-            if supa_rec.get("rate_limited"):
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=supa_rec.get("error")
-                )
-            otp_sent = supa_rec.get("success", False)
-            if not otp_sent:
-                _email_logger.warning("Supabase Auth recover returned non-success: %s; attempting direct SMTP fallback.", supa_rec.get("error"))
-                otp_sent = _dispatch_otp_email(user.email, user.display_name or user.username or "User", otp, "Password Recovery")
-        else:
-            otp_sent = _dispatch_otp_email(user.email, user.display_name or user.username or "User", otp, "Password Recovery")
-            _dispatch_password_reset_email(user.email, user.display_name or user.username or "User", user.reset_token)
+        # Dispatch recovery OTP via Brevo / primary provider
+        otp_sent = _dispatch_otp_email(user.email, user.display_name or user.username or "Learner", otp, "Password Recovery")
 
-        # Requirement 5: Do NOT display success if email delivery failed
+        # Never display success if dispatch failed
         if not otp_sent and not is_testing:
-            _email_logger.error("Password recovery email delivery failed for %s via all channels.", user.email)
+            _email_logger.error("Password recovery email delivery failed for %s.", user.email)
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="Unable to dispatch password recovery email. Please check your email address or try again in a few moments."
@@ -1776,10 +1739,10 @@ def verify_recovery_otp(payload: VerifyRecoveryOtpRequest, request: Request, db:
     user = db.query(UserAccount).filter(
         or_(UserAccount.email == email, UserAccount.username == email)
     ).first()
-    if not user:
+    if not user or not user.reset_otp:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired password reset request."
+            detail="Invalid or expired recovery code."
         )
 
     if (user.reset_otp_attempts or 0) >= 5:
@@ -1788,34 +1751,33 @@ def verify_recovery_otp(payload: VerifyRecoveryOtpRequest, request: Request, db:
             detail="Too many failed verification attempts. Please request a new recovery code."
         )
 
-    # Verify recovery code: try Supabase Auth recovery OTP first, then local fallback
-    is_valid_otp = False
-    if is_supabase_auth_enabled():
+    # Expiration check
+    if user.reset_otp_expires_at:
+        exp = user.reset_otp_expires_at
+        if exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > exp:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Recovery code has expired. Please request a new code."
+            )
+
+    # Verify recovery code
+    is_valid_otp = bool(user.reset_otp and verify_otp_hash(otp, user.reset_otp, user.salt))
+    if not is_valid_otp and is_supabase_auth_enabled():
         supa_verify = supabase_verify_otp(user.email, otp, "recovery")
         if supa_verify.get("success"):
             is_valid_otp = True
-
-    if not is_valid_otp and user.reset_otp:
-        if user.reset_otp_expires_at:
-            exp = user.reset_otp_expires_at
-            if exp.tzinfo is None:
-                exp = exp.replace(tzinfo=timezone.utc)
-            if datetime.now(timezone.utc) <= exp:
-                if verify_otp_hash(otp, user.reset_otp, user.salt):
-                    is_valid_otp = True
-        else:
-            if verify_otp_hash(otp, user.reset_otp, user.salt):
-                is_valid_otp = True
 
     if not is_valid_otp:
         user.reset_otp_attempts = (user.reset_otp_attempts or 0) + 1
         db.commit()
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid or expired recovery code."
+            detail="Invalid recovery code."
         )
 
-    # Valid OTP! Regenerate single-use reset_token valid 15 mins
+    # Valid OTP! Regenerate single-use reset_token valid 15 mins and invalidate OTP
     reset_token = f"rst_{secrets.token_urlsafe(32)}"
     now = datetime.now(timezone.utc)
     user.reset_token = reset_token

@@ -7583,64 +7583,122 @@
             }
         }
 
-        // ===================== BACKEND HEALTH CHECK =====================
+        // ===================== BACKEND HEALTH & WAKEUP MONITOR =====================
         let backendHealthState = {
             isHealthy: null,
             latencyMs: null,
             lastChecked: null,
             details: null
         };
+        let _healthCheckInFlight = null;
+        let _healthCheckRetryCount = 0;
+        let _healthCheckRetryTimer = null;
+        const MAX_HEALTH_RETRIES = 4;
 
-        async function checkBackendHealth(showToast = false) {
-            const start = Date.now();
-            try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 4000);
-                const res = await fetch(`${API_BASE}/api/health`, {
-                    method: 'GET',
-                    headers: { 'Accept': 'application/json' },
-                    signal: controller.signal
-                });
-                clearTimeout(timeoutId);
-                const latency = Date.now() - start;
-                if (res.ok) {
-                    const data = await res.json().catch(() => ({ status: 'healthy' }));
-                    backendHealthState = { isHealthy: true, latencyMs: latency, lastChecked: Date.now(), details: data };
-                    updateBackendHealthUI(true, latency);
-                    if (showToast && typeof showToastMessage === 'function') {
-                        showToastMessage(`Backend reachable (${latency}ms) at ${API_BASE}`);
-                    }
-                    return true;
-                } else {
-                    backendHealthState = { isHealthy: false, latencyMs: latency, lastChecked: Date.now(), details: null };
-                    updateBackendHealthUI(false, latency, `HTTP ${res.status}`);
-                    return false;
-                }
-            } catch (err) {
-                backendHealthState = { isHealthy: false, latencyMs: null, lastChecked: Date.now(), details: null };
-                updateBackendHealthUI(false, null, 'Offline');
-                return false;
+        async function checkBackendHealth(manualTrigger = false) {
+            if (manualTrigger) {
+                if (_healthCheckRetryTimer) clearTimeout(_healthCheckRetryTimer);
+                _healthCheckRetryCount = 0;
             }
+
+            // Reuse in-flight promise to prevent concurrent duplicate network requests
+            if (_healthCheckInFlight) return _healthCheckInFlight;
+
+            _healthCheckInFlight = (async () => {
+                const start = Date.now();
+                // 12s timeout for cold start detection
+                const timeoutMs = manualTrigger ? 15000 : 12000;
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+                // Show waking up state if in retry sequence
+                if (_healthCheckRetryCount > 0) {
+                    updateBackendHealthUI(null, null, 'Waking Up...');
+                }
+
+                try {
+                    const res = await fetch(`${API_BASE}/api/health`, {
+                        method: 'GET',
+                        headers: { 'Accept': 'application/json' },
+                        signal: controller.signal
+                    });
+                    clearTimeout(timeoutId);
+                    const latency = Date.now() - start;
+
+                    if (res.ok) {
+                        const data = await res.json().catch(() => ({ status: 'healthy' }));
+                        backendHealthState = { isHealthy: true, latencyMs: latency, lastChecked: Date.now(), details: data };
+                        updateBackendHealthUI(true, latency);
+                        _healthCheckRetryCount = 0;
+                        if (_healthCheckRetryTimer) clearTimeout(_healthCheckRetryTimer);
+                        if (manualTrigger && typeof showToastMessage === 'function') {
+                            showToastMessage(`Backend online (${latency}ms)`);
+                        }
+                        return true;
+                    } else {
+                        throw new Error(`HTTP ${res.status}`);
+                    }
+                } catch (err) {
+                    clearTimeout(timeoutId);
+                    const isColdStart = _healthCheckRetryCount < MAX_HEALTH_RETRIES;
+
+                    if (isColdStart && !manualTrigger) {
+                        _healthCheckRetryCount++;
+                        updateBackendHealthUI(null, null, 'Waking Up...');
+                        const nextDelay = Math.min(3000 * Math.pow(1.8, _healthCheckRetryCount - 1), 15000);
+                        _healthCheckRetryTimer = setTimeout(() => {
+                            _healthCheckInFlight = null;
+                            checkBackendHealth(false);
+                        }, nextDelay);
+                    } else {
+                        backendHealthState = { isHealthy: false, latencyMs: null, lastChecked: Date.now(), details: null };
+                        updateBackendHealthUI(false, null, 'Offline');
+                        if (manualTrigger && typeof showToastMessage === 'function') {
+                            showToastMessage(`Could not connect to backend at ${API_BASE}`, 'error');
+                        }
+                    }
+                    return false;
+                } finally {
+                    _healthCheckInFlight = null;
+                }
+            })();
+
+            return _healthCheckInFlight;
         }
 
         function updateBackendHealthUI(isHealthy, latency = null, statusLabel = '') {
             const banner = document.getElementById('backendOfflineBanner');
             const badge = document.getElementById('backendHealthBadge');
+
             if (banner) {
-                if (isHealthy) {
+                if (isHealthy === true) {
                     banner.style.display = 'none';
+                } else if (isHealthy === null) {
+                    banner.style.display = 'block';
+                    banner.style.background = '#854d0e';
+                    banner.style.borderColor = '#ca8a04';
+                    banner.style.color = '#fef08a';
+                    banner.innerHTML = `⏳ <strong>Connecting to CodeMind:</strong> Server is waking up (Render free instance, ~20-30s). Please wait... <button onclick="checkBackendHealth(true)" style="margin-left:12px; background:#a16207; color:#fff; border:1px solid #fde047; border-radius:4px; padding:3px 10px; cursor:pointer; font-size:12px; font-weight:700;">Check Now</button>`;
                 } else {
                     banner.style.display = 'block';
-                    const urlEl = document.getElementById('backendOfflineUrl');
-                    if (urlEl) urlEl.textContent = API_BASE;
+                    banner.style.background = '#7f1d1d';
+                    banner.style.borderColor = '#dc2626';
+                    banner.style.color = '#fecaca';
+                    banner.innerHTML = `⚠️ <strong>CodeMind Backend Offline:</strong> Unable to connect to API at <code style="background:rgba(0,0,0,0.3); padding:2px 6px; border-radius:4px;">${escapeHtml(API_BASE)}</code>. <button onclick="checkBackendHealth(true)" style="margin-left:12px; background:#991b1b; color:#fff; border:1px solid #f87171; border-radius:4px; padding:3px 10px; cursor:pointer; font-size:12px; font-weight:700;">Retry Connection</button>`;
                 }
             }
+
             if (badge) {
-                if (isHealthy) {
+                if (isHealthy === true) {
                     badge.style.color = '#4ade80';
                     badge.style.borderColor = 'rgba(74, 222, 128, 0.4)';
                     badge.innerHTML = `<span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:#4ade80; margin-right:6px; box-shadow:0 0 6px #4ade80;"></span>API Online${latency ? ` (${latency}ms)` : ''}`;
                     badge.title = `Connected to CodeMind Backend at ${API_BASE} (Click to re-check)`;
+                } else if (isHealthy === null) {
+                    badge.style.color = '#facc15';
+                    badge.style.borderColor = 'rgba(250, 204, 21, 0.5)';
+                    badge.innerHTML = `<span style="display:inline-block; width:7px; height:7px; border-radius:50%; background:#facc15; margin-right:6px; box-shadow:0 0 6px #facc15; animation:pulse 1.5s infinite;"></span>API Waking Up...`;
+                    badge.title = `CodeMind Backend is waking up (Render cold start). Click to check.`;
                 } else {
                     badge.style.color = '#f87171';
                     badge.style.borderColor = 'rgba(248, 113, 113, 0.5)';
@@ -8123,7 +8181,7 @@
             });
 
             btn.disabled = true;
-            btn.textContent = 'Creating account...';
+            btn.textContent = 'Creating account & sending code...';
 
             try {
                 const regPayload = {
@@ -8160,7 +8218,7 @@
                 window._pendingOtpUser = data.user;
                 window._pendingOtpProfile = data.profile;
                 showAuthOtpStep(targetEmail);
-                showAuthSuccess(`Account ready! A verification email has been dispatched to ${maskAuthEmail(targetEmail)}. Please check your inbox and click the confirmation link, or enter your 6-digit code below to activate your account.`);
+                showAuthSuccess(`Account created! A 6-digit verification code has been dispatched to ${maskAuthEmail(targetEmail)}. Please enter the code below to activate your account.`);
                 return;
             } catch(err) {
                 const classified = classifyApiError(err);

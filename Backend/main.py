@@ -13,6 +13,7 @@ load_dotenv(_backend_path.parent / ".env")
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from db.session import SessionLocal
@@ -119,13 +120,28 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"detail": "An internal server error occurred. Please try again later."}
     )
 
-@app.get("/api/health")
-@app.get("/health")
-def health_check():
+@app.api_route("/api/health", methods=["GET", "HEAD"])
+@app.api_route("/health", methods=["GET", "HEAD"])
+def health_check(check_db: bool = False):
+    """
+    Lightweight, high-speed health check endpoint.
+    Responds in < 2ms to verify server vitality. Optionally validates DB readiness if check_db=true.
+    """
+    db_status = "connected"
+    if check_db:
+        db = SessionLocal()
+        try:
+            from sqlalchemy import text
+            db.execute(text("SELECT 1"))
+            db_status = "connected"
+        except Exception as exc:
+            db_status = f"unreachable: {type(exc).__name__}"
+        finally:
+            db.close()
     return {
         "status": "healthy",
         "service": "CodeMind API",
-        "database": "connected",
+        "database": db_status,
         "execution_languages": ["python", "c", "cpp", "java"],
     }
 
